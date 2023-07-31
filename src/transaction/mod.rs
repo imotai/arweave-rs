@@ -1,7 +1,6 @@
 use serde::Deserialize;
 
 use crate::{
-    consts::VERSION,
     crypto::{base64::Base64, Provider},
     crypto::{
         hash::{DeepHashItem, ToItems},

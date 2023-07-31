@@ -53,4 +53,8 @@ pub enum Error {
 
     #[error("Error signin: {0}")]
     SigningError(String),
+    #[error("fail to post transaction for error : {0}")]
+    PostTxError(String),
+    #[error("invalid file path {0}")]
+    InvalidFileError(String),
 }

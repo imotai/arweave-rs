@@ -184,8 +184,7 @@ impl Arweave {
                 Tag::from_utf8_strs("Content-Type", content_type.as_ref())?;
             additional_tags.push(content_tag);
         }
-
-        let data = fs::read(file_path).expect("Could not read file");
+        let data = fs::read(file_path).map_err(|e| Error::InvalidFileError(format!("{e}")))?;
         let transaction = self
             .create_transaction(
                 Base64(b"".to_vec()),
@@ -195,19 +194,13 @@ impl Arweave {
                 fee,
                 auto_content_tag,
             )
-            .await
-            .expect("Could not create transaction");
-        let signed_transaction = self
-            .sign_transaction(transaction)
-            .expect("Could not sign tx");
+            .await?;
+        let signed_transaction = self.sign_transaction(transaction)?;
         let (id, reward) = if signed_transaction.data.0.len() > MAX_TX_DATA as usize {
             self.post_transaction_chunks(signed_transaction, 100)
-                .await
-                .expect("Could not post transaction chunks")
+                .await?
         } else {
-            self.post_transaction(&signed_transaction)
-                .await
-                .expect("Could not post transaction")
+            self.post_transaction(&signed_transaction).await?
         };
         Ok((id, reward))
     }

@@ -3,13 +3,13 @@
 use crate::error::Error;
 use data_encoding::BASE64URL;
 use jsonwebkey as jwk;
-use rand::thread_rng;
+use rand::{thread_rng, CryptoRng, Rng};
 use rsa::{
     pkcs8::{DecodePrivateKey, DecodePublicKey},
     PaddingScheme, PublicKey, PublicKeyParts, RsaPrivateKey, RsaPublicKey,
 };
 use sha2::Digest;
-use std::{fs, path::PathBuf, str::FromStr};
+use std::{fs, path::Path};
 
 use super::base64::Base64;
 
@@ -20,13 +20,13 @@ pub struct Signer {
 
 impl Default for Signer {
     fn default() -> Self {
-        let path = PathBuf::from_str("res/test_wallet.json").expect("Could not open .wallet.json");
+        let path = Path::new("res/test_wallet.json");
         Self::from_keypair_path(path).expect("Could not create signer")
     }
 }
 
 impl Signer {
-    fn new(priv_key: RsaPrivateKey) -> Self {
+    pub fn new(priv_key: RsaPrivateKey) -> Self {
         Self { priv_key }
     }
 
@@ -37,11 +37,17 @@ impl Signer {
         Self::new(priv_key)
     }
 
-    pub fn from_keypair_path(keypair_path: PathBuf) -> Result<Self, Error> {
+    pub fn from_keypair_path(keypair_path: &Path) -> Result<Self, Error> {
         let data = fs::read_to_string(keypair_path).expect("Could not open file");
         let jwk_parsed: jwk::JsonWebKey = data.parse().expect("Could not parse key");
 
         Ok(Self::from_jwk(jwk_parsed))
+    }
+
+    pub fn from_random<R: Rng + CryptoRng>(r: &mut R) -> Self {
+        let bits = 2048;
+        let priv_key = RsaPrivateKey::new(r, bits).expect("failed to generate a key");
+        Self::new(priv_key)
     }
 
     pub fn public_key(&self) -> Base64 {

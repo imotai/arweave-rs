@@ -2,7 +2,6 @@ use reqwest::{
     header::{ACCEPT, CONTENT_TYPE},
     StatusCode,
 };
-use serde_json::json;
 use std::{str::FromStr, thread::sleep, time::Duration};
 
 use crate::{
@@ -44,8 +43,6 @@ impl TxClient {
             .base_url
             .join("tx")
             .expect("Could not join base_url with /tx");
-
-        dbg!(json!(signed_transaction));
         while (retries < CHUNKS_RETRIES) & (status != reqwest::StatusCode::OK) {
             let res = self
                 .client
@@ -57,7 +54,6 @@ impl TxClient {
                 .await
                 .expect("Could not post transaction");
             status = res.status();
-            dbg!(status);
             if status == reqwest::StatusCode::OK {
                 return Ok((signed_transaction.id.clone(), signed_transaction.reward));
             }
@@ -83,7 +79,7 @@ impl TxClient {
         Base64::from_str(&last_tx_str).unwrap()
     }
 
-    pub async fn get_fee(&self, target: Base64, data: Vec<u8>) -> Result<u64, Error> {
+    pub async fn get_fee(&self, target: &Base64, data: &[u8]) -> Result<u64, Error> {
         let url = self
             .base_url
             .join(&format!("price/{}/{}", data.len(), target))
@@ -94,11 +90,24 @@ impl TxClient {
             .json::<u64>()
             .await
             .expect("Could not get base fee");
-
         Ok(winstons_per_bytes)
     }
 
-    pub async fn get_tx(&self, id: Base64) -> Result<(StatusCode, Option<Tx>), Error> {
+    pub async fn get_fee_by_filesize(&self, size: u64) -> Result<u64, Error> {
+        let url = self
+            .base_url
+            .join(&format!("price/{}", size))
+            .expect("Could not join base_url with /price/{}/{}");
+        let winstons_per_bytes = reqwest::get(url)
+            .await
+            .map_err(|e| Error::GetPriceError(e.to_string()))?
+            .json::<u64>()
+            .await
+            .expect("Could not get base fee");
+        Ok(winstons_per_bytes)
+    }
+
+    pub async fn get_tx(&self, id: &Base64) -> Result<(StatusCode, Option<Tx>), Error> {
         let res = self
             .client
             .get(
@@ -125,7 +134,37 @@ impl TxClient {
         Err(Error::TransactionInfoError(res.status().to_string()))
     }
 
-    pub async fn get_tx_status(&self, id: Base64) -> Result<(StatusCode, Option<TxStatus>), Error> {
+    pub async fn get_tx_data(&self, id: &Base64) -> Result<(StatusCode, Option<Vec<u8>>), Error> {
+        let res = self
+            .client
+            .get(
+                self.base_url
+                    .join(&format!("tx/{}/data", id))
+                    .expect("Could not join base_url with /tx"),
+            )
+            .send()
+            .await
+            .expect("Could not get tx");
+
+        if res.status() == StatusCode::OK {
+            let text = res
+                .text()
+                .await
+                .expect("Could not parse response to string");
+            let body = Base64::from_str(text.as_str()).expect("fail to decode body");
+            return Ok((StatusCode::OK, Some(body.0)));
+        } else if res.status() == StatusCode::ACCEPTED {
+            //Tx is pending
+            return Ok((StatusCode::ACCEPTED, None));
+        }
+
+        Err(Error::TransactionInfoError(res.status().to_string()))
+    }
+
+    pub async fn get_tx_status(
+        &self,
+        id: &Base64,
+    ) -> Result<(StatusCode, Option<TxStatus>), Error> {
         let res = self
             .client
             .get(

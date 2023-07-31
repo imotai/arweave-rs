@@ -1,12 +1,13 @@
-use std::{fs, path::PathBuf, str::FromStr};
-
 use consts::{ARWEAVE_BASE_URL, MAX_TX_DATA};
 use crypto::base64::Base64;
 use error::Error;
 use futures::{stream, Stream, StreamExt};
 use pretend::StatusCode;
 use reqwest::Client;
+use rsa::RsaPrivateKey;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
+use std::{fs, path::Path};
 use transaction::{
     client::TxClient,
     tags::{FromUtf8Strs, Tag},
@@ -59,7 +60,21 @@ impl Default for Arweave {
 }
 
 impl Arweave {
-    pub fn from_keypair_path(keypair_path: PathBuf, base_url: url::Url) -> Result<Arweave, Error> {
+    pub fn from_private_key(priv_key: RsaPrivateKey, base_url: url::Url) -> Result<Arweave, Error> {
+        let tx_client = TxClient::new(reqwest::Client::new(), base_url.clone())
+            .expect("Could not create TxClient");
+        let signer = ArweaveSigner::from_private_key(priv_key).expect("Could not create TxClient");
+        let uploader = Uploader::new(base_url.clone());
+        let arweave = Arweave {
+            base_url,
+            signer,
+            tx_client,
+            uploader,
+        };
+        Ok(arweave)
+    }
+
+    pub fn from_keypair_path(keypair_path: &Path, base_url: url::Url) -> Result<Arweave, Error> {
         let signer =
             ArweaveSigner::from_keypair_path(keypair_path).expect("Could not create signer");
         let tx_client = TxClient::new(reqwest::Client::new(), base_url.clone())
@@ -123,15 +138,26 @@ impl Arweave {
         self.tx_client.get_last_tx().await
     }
 
-    pub async fn get_fee(&self, target: Base64, data: Vec<u8>) -> Result<u64, Error> {
+    pub async fn get_fee(&self, target: &Base64, data: &[u8]) -> Result<u64, Error> {
         self.tx_client.get_fee(target, data).await
     }
 
-    pub async fn get_tx(&self, id: Base64) -> Result<(StatusCode, Option<Tx>), Error> {
+    pub async fn get_fee_by_size(&self, size: u64) -> Result<u64, Error> {
+        self.tx_client.get_fee_by_filesize(size).await
+    }
+
+    pub async fn get_tx(&self, id: &Base64) -> Result<(StatusCode, Option<Tx>), Error> {
         self.tx_client.get_tx(id).await
     }
 
-    pub async fn get_tx_status(&self, id: Base64) -> Result<(StatusCode, Option<TxStatus>), Error> {
+    pub async fn get_tx_data(&self, id: &Base64) -> Result<(StatusCode, Option<Vec<u8>>), Error> {
+        self.tx_client.get_tx_data(id).await
+    }
+
+    pub async fn get_tx_status(
+        &self,
+        id: &Base64,
+    ) -> Result<(StatusCode, Option<TxStatus>), Error> {
         self.tx_client.get_tx_status(id).await
     }
 
@@ -145,7 +171,7 @@ impl Arweave {
 
     pub async fn upload_file_from_path(
         &self,
-        file_path: PathBuf,
+        file_path: &Path,
         additional_tags: Vec<Tag<Base64>>,
         fee: u64,
     ) -> Result<(String, u64), Error> {
@@ -158,8 +184,7 @@ impl Arweave {
                 Tag::from_utf8_strs("Content-Type", content_type.as_ref())?;
             additional_tags.push(content_tag);
         }
-
-        let data = fs::read(file_path).expect("Could not read file");
+        let data = fs::read(file_path).map_err(|e| Error::InvalidFileError(format!("{e}")))?;
         let transaction = self
             .create_transaction(
                 Base64(b"".to_vec()),
@@ -169,21 +194,14 @@ impl Arweave {
                 fee,
                 auto_content_tag,
             )
-            .await
-            .expect("Could not create transaction");
-        let signed_transaction = self
-            .sign_transaction(transaction)
-            .expect("Could not sign tx");
+            .await?;
+        let signed_transaction = self.sign_transaction(transaction)?;
         let (id, reward) = if signed_transaction.data.0.len() > MAX_TX_DATA as usize {
             self.post_transaction_chunks(signed_transaction, 100)
-                .await
-                .expect("Could not post transaction chunks")
+                .await?
         } else {
-            self.post_transaction(&signed_transaction)
-                .await
-                .expect("Could not post transaction")
+            self.post_transaction(&signed_transaction).await?
         };
-
         Ok((id, reward))
     }
 
